@@ -253,7 +253,7 @@ def api_rename(mid, title):
 # ----------------------------------------------------------------------
 # 本机 → 线上 同步（数据与回收站状态推送到线上站点，线上所有页面随之更新）
 # ----------------------------------------------------------------------
-DEFAULT_UPSTREAM = "https://a36b855c28149429d.app.workbuddy.host"
+DEFAULT_UPSTREAM = ""   # 留空则不同步；在 config.json 的 upstream 填入你的线上地址
 
 _push_lock = threading.Lock()
 _push_state = {"running": False, "last_at": "", "last_ok": None, "last_message": ""}

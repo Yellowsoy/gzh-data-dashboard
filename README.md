@@ -1,8 +1,18 @@
 # 微信公众号数据看板
 
-面向党政机关的微信公众号运营数据可视化看板：从微信官方接口采集文章阅读、分享、粉丝等数据，在浏览器中以图表呈现，支持多端同步、回收站管理、布局自定义与服务端鉴权。
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.8%2B-blue?logo=python&logoColor=white)](https://www.python.org/)
+[![Dependencies](https://img.shields.io/badge/backend%20deps-zero-brightgreen)](https://docs.python.org/3/library/)
+[![ECharts](https://img.shields.io/badge/ECharts-5-red)](https://echarts.apache.org/)
+[![Version](https://img.shields.io/badge/version-1.0.0-informational)](CHANGELOG.md)
+
+面向党政机关、企事业单位的微信公众号运营数据可视化看板：从微信官方接口采集文章阅读、分享、粉丝等数据，在浏览器中以图表呈现，支持多端同步、回收站管理、布局自定义与服务端鉴权。
 
 纯标准库实现，**零第三方后端依赖**；前端仅依赖 ECharts 与 SheetJS 两个本地化 JS 库（已内置，无需 CDN，可在内网环境运行）。
+
+> **两个部署版本**
+> - [`local-deployment/`](local-deployment/) —— 在单位内网电脑上运行，自动采集公众号数据，并同步到线上
+> - [`workbuddy-deployment/`](workbuddy-deployment/) —— 部署到 [WorkBuddy](https://www.workbuddy.cn) 云端，获得固定公网链接，各端直接访问
 
 ## 功能特性
 
@@ -19,6 +29,20 @@
 - **服务端密码验证**：管理密码只保存在服务端，页面源码中不含密码；验证通过后下发 8 小时有效的临时令牌，所有写操作凭令牌放行
 - **发布日期自动校正**：以文章日报中的最早出现日期为权威口径，防止历史补扫导致的日期错标
 - **响应式**：桌面 / 平板 / 手机自适应，无横向溢出
+
+## 目录
+
+- [技术栈](#技术栈)
+- [目录结构](#目录结构)
+- [快速开始](#快速开始)
+- [数据流](#数据流)
+- [数据结构](#数据结构datajs)
+- [API 接口](#api-接口)
+- [安全机制](#安全机制)
+- [已知限制](#已知限制)
+- [常见问题](#常见问题)
+- [参与贡献](#参与贡献)
+- [开源协议](#开源协议)
 
 ## 技术栈
 
@@ -166,9 +190,22 @@ window.DATA = {
 **Q：文章发布日期的统计口径？**
 以文章在日报数据中**最早出现的日期**为准（页面加载时自动校正，采集端入库时按最小日期回填），可避免历史补扫造成的错标。
 
+## 参与贡献
+
+欢迎提交 Issue 与 Pull Request。请先阅读 [贡献指南](CONTRIBUTING.md) 与 [变更日志](CHANGELOG.md)。
+
+提交前请确认代码中不含任何真实凭据（`appid`、`secret`、`access_token`）与业务数据。
+
 ## 开源协议
 
-[MIT](LICENSE)。可自由使用、修改、分发与商用，需保留版权声明。ECharts（Apache-2.0）与 SheetJS（Apache-2.0）为本地内置的第三方库，其版权归原作者所有。
+[MIT](LICENSE)。可自由使用、修改、分发与商用，需保留版权声明。
+
+本项目内置的第三方库版权归原作者所有：
+
+| 库 | 协议 |
+|---|---|
+| [Apache ECharts](https://echarts.apache.org/) | Apache-2.0 |
+| [SheetJS Community Edition](https://sheetjs.com/) | Apache-2.0 |
 
 ## 致谢
 

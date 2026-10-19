@@ -273,8 +273,8 @@ chmod +x install.sh stop.sh
 **相关配置（config.json）**
 
 ```json
-"upstream": "https://a36b855c28149429d.app.workbuddy.host",
-"upstream_pwd": "change-me",
+"upstream": "https://your-dashboard.example.com",
+"upstream_pwd": "你的线上管理密码",
 "upstream_auto_push": true
 ```
 
