@@ -48,7 +48,8 @@ PID_PATH = os.path.join(BASE_DIR, "serve.pid")
 
 # 写操作密码（删除/还原/彻底删除/重命名/采集更新）。内网开放后，接口同样需要密码。
 # 页面不再保存密码：POST /api/auth 由本服务比对后下发临时 token，写操作凭 token 放行。
-ACCESS_PWD = "change-me"
+# 默认值仅为占位符，部署前必须修改：推荐设置环境变量 ADMIN_PWD，或直接改下面这一行。
+ACCESS_PWD = os.environ.get("ADMIN_PWD", "change-me")
 TOKEN_TTL = 8 * 60 * 60
 _TOKENS = {}
 

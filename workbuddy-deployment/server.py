@@ -22,7 +22,8 @@ from urllib.parse import urlparse
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 PORT = int(os.environ.get("PORT", "3000"))
-PWD = os.environ.get("ADMIN_PWD", "change-me")          # 管理密码只保存在服务端
+# 管理密码只保存在服务端。默认值仅为占位符，部署前必须通过环境变量 ADMIN_PWD 设置。
+PWD = os.environ.get("ADMIN_PWD", "change-me")
 STATE_PATH = os.path.join(BASE, "state.json")
 DATA_PATH = os.path.join(BASE, "data.js")
 MAX_BODY = 12 * 1024 * 1024  # 12MB
