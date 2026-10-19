@@ -1,0 +1,18 @@
+# 敏感信息与本地运行产物，一律不入库
+config.json
+token.json
+store.json
+sync.log
+serve.pid
+__pycache__/
+*.pyc
+
+# 数据文件（由采集脚本生成或页面上传，含业务数据）
+data.js
+data.js.tmp
+state.json
+store.json.tmp
+
+# 系统
+.DS_Store
+Thumbs.db

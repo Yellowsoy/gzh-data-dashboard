@@ -1,0 +1,10 @@
+{
+  "_说明": "复制本文件为 config.json 并填入你自己的公众号凭据；config.json 含密钥，已被 .gitignore 排除，切勿提交或外发",
+  "appid": "wx你的AppID",
+  "secret": "你的AppSecret",
+  "lookback_days": 7,
+  "article_detail_days": 30,
+  "upstream": "",
+  "upstream_pwd": "你的线上管理密码",
+  "upstream_auto_push": true
+}
