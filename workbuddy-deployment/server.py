@@ -29,6 +29,16 @@ DATA_PATH = os.path.join(BASE, "data.js")
 MAX_BODY = 12 * 1024 * 1024  # 12MB
 TOKEN_TTL = 8 * 60 * 60      # 解锁令牌有效期：8 小时
 
+# 页脚版权：通过环境变量 FOOTER_TEXT 设置，例如
+#   FOOTER_TEXT="© 2026 你的站名 丨 蜀ICP备XXXXXXXX号"
+# 留空则不在页面注入页脚
+FOOTER_TEXT = os.environ.get("FOOTER_TEXT", "")
+FOOTER_HTML = (
+    '<footer style="text-align:center;padding:16px 0 20px;'
+    'font-size:12px;line-height:1.6;color:#9aa0a6;letter-spacing:.2px">'
+    + FOOTER_TEXT + "</footer>"
+) if FOOTER_TEXT else ""
+
 _TOKENS = {}                 # token -> 过期时间戳
 _TOKEN_LOCK = threading.Lock()
 
@@ -188,6 +198,9 @@ class Handler(BaseHTTPRequestHandler):
         except OSError:
             self._json({"ok": False, "message": "not found"}, code=404)
             return
+        # 设置了 FOOTER_TEXT 时，在网页底部注入版权页脚
+        if rel.endswith(".html") and FOOTER_HTML and b"</body>" in body:
+            body = body.replace(b"</body>", FOOTER_HTML.encode("utf-8") + b"</body>", 1)
         ext = os.path.splitext(fp)[1].lower()
         self.send_response(200)
         self.send_header("Content-Type", CONTENT_TYPE.get(ext, "application/octet-stream"))
