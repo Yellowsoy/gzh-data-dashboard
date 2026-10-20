@@ -388,6 +388,9 @@ input[type="checkbox"].cb { width: 15px; height: 15px; accent-color: var(--red);
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }
 }
+.site-footer{ text-align:center; padding:16px 12px 24px; color:#8a8a8a; font-size:12px; letter-spacing:.5px; }
+.site-footer .sep{ margin:0 6px; color:#c9c9c9; }
+@media (max-width:640px){ .site-footer{ font-size:11px; padding-bottom:18px; } }
 </style>
 </head>
 <body>
@@ -2279,5 +2282,6 @@ window.addEventListener('load', function () {
 });
 })();
 </script>
+<footer class="site-footer">&copy; 2026 忍黄豆<span class="sep">丨</span>蜀ICP备2026002707号</footer>
 </body>
 </html>
