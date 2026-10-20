@@ -14,6 +14,18 @@
 > - [`local-deployment/`](local-deployment/) —— 在单位内网电脑上运行，自动采集公众号数据，并同步到线上
 > - [`workbuddy-deployment/`](workbuddy-deployment/) —— 部署到 [WorkBuddy](https://www.workbuddy.cn) 云端，获得固定公网链接，各端直接访问
 
+## 效果预览
+
+> 以下截图使用**演示数据**生成，仅用于展示界面效果。
+
+**桌面端（1440×2600 整页）**
+
+![桌面端效果](screenshots/dashboard-demo-desktop.png)
+
+**手机端（414×2200 整页）**
+
+![手机端效果](screenshots/dashboard-demo-mobile.png)
+
 ## 功能特性
 
 - **关键指标**：累计粉丝、最新日净增、近 7 天阅读/分享人数、文章总数，以及可切换口径的**周发文数 / 周阅读数**
@@ -32,6 +44,7 @@
 
 ## 目录
 
+- [效果预览](#效果预览)
 - [技术栈](#技术栈)
 - [目录结构](#目录结构)
 - [快速开始](#快速开始)
