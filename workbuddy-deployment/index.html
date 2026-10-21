@@ -1612,12 +1612,12 @@ function adoptCloud(j) {
     }
   }
 }
-function pushCloud(extra) {
+/* quiet=true 表示页面加载/探测阶段的自动同步：不弹提示，失败静默回退 */
+function pushCloud(quiet) {
   if (!cloudMode) return;
   cloudRev = Date.now();
   LSS('wechat_sync_rev_v1', cloudRev);
   var payload = { token: authToken(), rev: cloudRev, deleted: localDeleted, titles: localTitles, layout: cloudLayout };
-  if (extra) { Object.keys(extra).forEach(function (k) { payload[k] = extra[k]; }); }
   fetch('/api/state', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -1628,11 +1628,20 @@ function pushCloud(extra) {
     if (j && j._status === 403) {
       clearAuthSession();
       updateLockBtn();
-      toast('登录已过期，请重新解锁后再操作', 'info');
+      /* 登录态失效（token 过期/服务重启）：静默把本地游标回退为服务端 rev，
+         否则本地 rev 永远偏大，每次刷新都会重复触发同步并弹"已过期"提示 */
+      fetch('/api/state').then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (s) {
+          if (s && typeof s.rev === 'number' && s.rev !== cloudRev) {
+            cloudRev = s.rev;
+            LSS('wechat_sync_rev_v1', cloudRev);
+          }
+        }).catch(function () {});
+      if (!quiet) toast('登录已过期，请重新解锁后再操作', 'info');
       return;
     }
-    if (!j || !j.ok) toast('同步到其他设备失败：' + ((j && j.message) || '请检查网络'), 'err');
-  }).catch(function () { toast('同步到其他设备失败：请检查网络', 'err'); });
+    if (!quiet && (!j || !j.ok)) toast('同步到其他设备失败：' + ((j && j.message) || '请检查网络'), 'err');
+  }).catch(function () { if (!quiet) toast('同步到其他设备失败：请检查网络', 'err'); });
 }
 function probeBackends() {
   var ctl = new AbortController();
@@ -1650,7 +1659,14 @@ function probeBackends() {
         try { hadOverride = !!localStorage.getItem(DATA_OVERRIDE_KEY); localStorage.removeItem(DATA_OVERRIDE_KEY); } catch (e) {}
         if (j.rev > cloudRev) { adoptCloud(j); location.reload(); return; }
         if (hadOverride) { location.reload(); return; }   /* 清掉旧的本机覆盖，改用服务端数据 */
-        if (autoBinChanged || j.rev < cloudRev) pushCloud();
+        if (j.rev < cloudRev) {
+          /* 本地游标异常偏大（历史推送失败遗留，如旧版先把 rev 写大再推送、遇 token 过期 403）：
+             以服务端为准静默回退。不回退会导致本机永远收不到云端更新，且每次刷新都重复触发同步 */
+          cloudRev = j.rev;
+          LSS('wechat_sync_rev_v1', cloudRev);
+        }
+        /* 自动同步一律静默；未解锁时没有 token，推了也是 403，等用户解锁后的操作再同步 */
+        if (autoBinChanged && isUnlocked()) pushCloud(true);
         return;
       }
       probeServer();

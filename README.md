@@ -10,9 +10,10 @@
 
 纯标准库实现，**零第三方后端依赖**；前端仅依赖 ECharts 与 SheetJS 两个本地化 JS 库（已内置，无需 CDN，可在内网环境运行）。
 
-> **两个部署版本**
+> **三个部署版本**
 > - [`local-deployment/`](local-deployment/) —— 在单位内网电脑上运行，自动采集公众号数据，并同步到线上
-> - [`workbuddy-deployment/`](workbuddy-deployment/) —— 部署到 [WorkBuddy](https://www.workbuddy.cn) 云端，获得固定公网链接，各端直接访问
+> - [`workbuddy-deployment/`](workbuddy-deployment/) —— Python 标准库单文件服务，可跑在任意带 Python 的云主机或 [WorkBuddy](https://www.workbuddy.cn) 上
+> - [`edgeone-deployment/`](edgeone-deployment/) —— **Serverless 版**：前端静态托管 + Edge Functions + Blob 存储，跑在腾讯云 EdgeOne Pages 免费额度内，无需自备服务器
 
 ## 效果预览
 
@@ -39,6 +40,8 @@
 - **数据自动采集**（本地版）：调用微信公众平台官方接口，按日采集文章与粉丝数据
 - **本地 → 线上自动同步**（本地版）：采集完成后自动把数据与回收站状态推送到线上站点
 - **服务端密码验证**：管理密码只保存在服务端，页面源码中不含密码；验证通过后下发 8 小时有效的临时令牌，所有写操作凭令牌放行
+  - Serverless 版用 HMAC-SHA256 无状态令牌，服务端不保存任何会话，天然支持多实例与冷启动
+- **三种部署形态**：本地电脑（自动采集）/ Python 单文件服务 / EdgeOne Serverless，前端同一份代码
 - **发布日期自动校正**：以文章日报中的最早出现日期为权威口径，防止历史补扫导致的日期错标
 - **响应式**：桌面 / 平板 / 手机自适应，无横向溢出
 
@@ -84,10 +87,17 @@ gzh-data-dashboard/
 │   └── vendor/                   # 本地化的前端库
 │       ├── echarts.min.js
 │       └── xlsx.full.min.js
-└── workbuddy-deployment/         # 版本二：WorkBuddy 云端部署
-    ├── index.html                # 看板页面（与本地版同一份）
-    ├── server.py                 # 云端服务（静态资源 + 同步 API + 令牌鉴权）
-    └── vendor/
+├── workbuddy-deployment/         # 版本二：Python 单文件服务
+│   ├── index.html                # 看板页面（与本地版同一份）
+│   ├── server.py                 # 云端服务（静态资源 + 同步 API + 令牌鉴权）
+│   └── vendor/
+└── edgeone-deployment/           # 版本三：EdgeOne Pages（Serverless）
+    ├── index.html                # 看板页面（脱敏版，含页脚渲染脚本）
+    ├── package.json              # 函数依赖声明
+    ├── lib/                      # 函数共用代码（Blob / 令牌 / HTTP）
+    ├── edge-functions/           # 路由：/data.js 与 /api/*
+    ├── vendor/
+    └── README.md                 # EdgeOne 部署说明
 ```
 
 ## 快速开始
@@ -123,6 +133,24 @@ python3 server.py          # 本地预览（默认端口 3000，可用 PORT 环�
 在 WorkBuddy 中发布时，将 `workbuddy-deployment` 目录作为站点目录，启动命令设为 `python3 server.py`。发布后链接固定，重复部署（更新代码）链接不变。
 
 首次部署后需要导入一份 `data.js`（由本地版采集生成，或在页面上传），数据格式见下文「数据结构」。
+
+### 版本三：EdgeOne Pages 部署（推荐，免服务器）
+
+不需要服务器、不需要自己管进程，静态前端与 API 全部跑在腾讯云 EdgeOne Pages 上，免费额度足够个人/单位日常使用。
+
+1. 把本仓库 fork 或 clone 到自己的 GitHub
+2. 在 EdgeOne Pages 控制台新建项目，关联该仓库，**根目录填 `edgeone-deployment`**
+3. 在项目设置里添加环境变量：
+   | 变量 | 必填 | 说明 |
+   | --- | --- | --- |
+   | `ADMIN_PWD` | ✅ | 管理密码；不配置则所有写操作被拒绝 |
+   | `FOOTER_TEXT` | 可选 | 页脚版权文案 |
+   | `GZH_STORE_NAME` | 可选 | Blob 存储名，默认 `gzh-data` |
+4. 首次部署后在页面「更新数据」里上传一次 `data.js`，数据会写入 Blob，之后所有设备共享
+
+数据不落在仓库里：`data.js` 与 `state.json` 都存在 EdgeOne Blob，仓库中不含任何真实统计数据。
+
+> 详细说明（路由规则、为什么用签名令牌、目录约定）见 [`edgeone-deployment/README.md`](edgeone-deployment/README.md)。
 
 ## 获取公众号凭据（AppID / AppSecret）
 
@@ -287,7 +315,7 @@ window.DATA = {
 
 **Q：如何在页面底部加版权/备案信息？**
 线上版支持注入页脚：设置环境变量 `FOOTER_TEXT` 后重启服务即可，例如
-`FOOTER_TEXT="© 2026 你的站名 丨 蜀ICP备XXXXXXXX号"`。
+`FOOTER_TEXT="© 2026 你的站名 丨 某ICP备XXXXXXXX号"`。
 页脚只由线上服务在返回网页时注入，`index.html` 本身不用改动（本地版与线上版共用同一份页面文件，本地访问不会出现页脚）。
 不设置该变量则不注入。
 

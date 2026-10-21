@@ -30,7 +30,7 @@ MAX_BODY = 12 * 1024 * 1024  # 12MB
 TOKEN_TTL = 8 * 60 * 60      # 解锁令牌有效期：8 小时
 
 # 页脚版权：通过环境变量 FOOTER_TEXT 设置，例如
-#   FOOTER_TEXT="© 2026 你的站名 丨 蜀ICP备XXXXXXXX号"
+#   FOOTER_TEXT="© 2026 你的站名 丨 某ICP备XXXXXXXX号"
 # 留空则不在页面注入页脚
 FOOTER_TEXT = os.environ.get("FOOTER_TEXT", "")
 FOOTER_HTML = (
