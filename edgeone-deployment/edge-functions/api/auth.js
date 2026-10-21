@@ -23,5 +23,5 @@ export default async function onRequest({ request, env }) {
     return json({ ok: false, message: "密码不正确" }, 403);
   }
   const token = await issueToken(env);
-  return json({ ok: true, token, expires_in: TOKEN_TTL_MS });
+  return json({ ok: true, token, expires_in: Math.floor(TOKEN_TTL_MS / 1000) });
 }

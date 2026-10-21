@@ -35,6 +35,7 @@ from datetime import datetime
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse
 from urllib.request import urlopen, Request
+from urllib.error import HTTPError, URLError
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE_DIR)
@@ -254,7 +255,11 @@ def api_rename(mid, title):
 # ----------------------------------------------------------------------
 # 本机 → 线上 同步（数据与回收站状态推送到线上站点，线上所有页面随之更新）
 # ----------------------------------------------------------------------
-DEFAULT_UPSTREAM = ""   # 留空则不同步；在 config.json 的 upstream 填入你的线上地址
+# 线上站点地址：留空则不同步；在 config.json 的 upstream 填入你自己的线上地址
+# 若线上同时提供「自定义域名 + 平台预设域名」两套入口，可把预设域名写进 UPSTREAM_FALLBACKS，
+# 主域名不可达时会自动回退，保证同步不中断。
+DEFAULT_UPSTREAM = ""
+UPSTREAM_FALLBACKS = []
 
 _push_lock = threading.Lock()
 _push_state = {"running": False, "last_at": "", "last_ok": None, "last_message": ""}
@@ -312,8 +317,24 @@ def write_data_js_from_upload(data, gen=""):
 def _http_post_json(url, obj, timeout=60):
     req = Request(url, data=json.dumps(obj, ensure_ascii=False).encode("utf-8"),
                   headers={"Content-Type": "application/json"}, method="POST")
-    with urlopen(req, timeout=timeout) as r:
-        raw = r.read().decode("utf-8", "replace")
+    try:
+        with urlopen(req, timeout=timeout) as r:
+            raw = r.read().decode("utf-8", "replace")
+    except HTTPError as e:
+        # 线上鉴权失败/令牌过期会返回 403/401，仍需解析响应体，否则上层无法判断回退
+        raw = ""
+        try:
+            raw = e.read().decode("utf-8", "replace")
+        except Exception:
+            pass
+        try:
+            j = json.loads(raw)
+            if isinstance(j, dict):
+                j.setdefault("ok", False)
+                return j
+        except Exception:
+            pass
+        return {"ok": False, "message": "HTTP %s" % getattr(e, "code", "错误")}
     try:
         return json.loads(raw)
     except Exception:
@@ -329,22 +350,48 @@ def _log_push(msg):
 
 
 # 线上 token 缓存：推送前用线上密码换取临时 token，过期自动刷新
-_UP_TOKEN_CACHE = {"key": "", "token": "", "exp": 0}
+_UP_TOKEN_CACHE = {"key": "", "token": "", "exp": 0, "base": ""}
+
+
+def _upstream_candidates(conf):
+    """上行候选地址：主用地址 +（仅当使用默认地址时）备用域名。"""
+    url = conf["url"]
+    if not url:
+        return []
+    cands = [url]
+    if url == DEFAULT_UPSTREAM:
+        for u in UPSTREAM_FALLBACKS:
+            if u and u not in cands:
+                cands.append(u)
+    return cands
 
 
 def _upstream_token(conf):
+    """向线上换取临时令牌；主用地址不可用时自动回退到备用域名。"""
     key = conf["url"] + "|" + conf["pwd"]
     now = time.time()
-    if _UP_TOKEN_CACHE["key"] == key and _UP_TOKEN_CACHE["exp"] > now + 60:
+    if (_UP_TOKEN_CACHE["key"] == key and _UP_TOKEN_CACHE["exp"] > now + 60
+            and _UP_TOKEN_CACHE["base"]):
         return _UP_TOKEN_CACHE["token"]
-    j = _http_post_json(conf["url"] + "/api/auth",
-                        {"pwd": conf["pwd"]}, timeout=30)
-    if j.get("ok") and j.get("token"):
-        ttl = int(j.get("expires_in") or 28800)
-        _UP_TOKEN_CACHE.update({"key": key, "token": j["token"],
-                                "exp": now + ttl})
-        return j["token"]
-    raise RuntimeError("线上密码验证失败：%s" % (j.get("message") or "未知原因"))
+
+    errs = []
+    for base in _upstream_candidates(conf):
+        try:
+            j = _http_post_json(base + "/api/auth",
+                                {"pwd": conf["pwd"]}, timeout=30)
+        except (URLError, OSError) as e:
+            errs.append("%s 不可达（%s）" % (base, str(e)[:60]))
+            continue
+        if j.get("ok") and j.get("token"):
+            ttl = int(j.get("expires_in") or 28800)
+            # 兼容线上误把毫秒当秒下发的情况，避免本端缓存过期时间过长
+            if ttl > 7 * 24 * 3600:
+                ttl = ttl // 1000
+            _UP_TOKEN_CACHE.update({"key": key, "token": j["token"],
+                                    "exp": now + ttl, "base": base})
+            return j["token"]
+        errs.append("%s：%s" % (base, j.get("message") or "密码校验失败"))
+    raise RuntimeError("线上密码验证失败：" + "；".join(errs))
 
 
 def _up_post(conf, api_path, payload, timeout=30):
@@ -352,13 +399,15 @@ def _up_post(conf, api_path, payload, timeout=30):
     payload = dict(payload)
     payload.pop("pwd", None)
     payload["token"] = _upstream_token(conf)
-    j = _http_post_json(conf["url"] + api_path, payload, timeout=timeout)
+    base = _UP_TOKEN_CACHE.get("base") or conf["url"]
+    j = _http_post_json(base + api_path, payload, timeout=timeout)
     if not j.get("ok"):
         msg = str(j.get("message") or "")
         if "过期" in msg or "未解锁" in msg:
             _UP_TOKEN_CACHE["exp"] = 0
             payload["token"] = _upstream_token(conf)
-            j = _http_post_json(conf["url"] + api_path, payload,
+            base = _UP_TOKEN_CACHE.get("base") or conf["url"]
+            j = _http_post_json(base + api_path, payload,
                                 timeout=timeout)
     return j
 
@@ -368,6 +417,8 @@ def upstream_snapshot():
     return {
         "configured": bool(conf["url"]),
         "url": conf["url"],
+        "active_url": (_UP_TOKEN_CACHE.get("base") or "")
+        if _UP_TOKEN_CACHE.get("key") == conf["url"] + "|" + conf["pwd"] else "",
         "auto_push": conf["auto"],
         "running": _push_state.get("running", False),
         "last_push_at": _push_state.get("last_at", ""),
@@ -427,7 +478,9 @@ def push_to_upstream(reason="", with_data=True, with_state=True):
                 msgs.append("回收站状态同步失败：%s" % e)
         msg = "；".join(msgs) or "无内容"
         _push_state.update({"last_at": _now(), "last_ok": ok_all, "last_message": msg})
-        _log_push("%s → %s（%s）" % (reason or "手动", conf["url"], msg))
+        _log_push("%s → %s（%s）" % (reason or "手动",
+                                     _UP_TOKEN_CACHE.get("base") or conf["url"],
+                                     msg))
         return ok_all, msg
     finally:
         with _push_lock:
