@@ -401,7 +401,7 @@ input[type="checkbox"].cb { width: 15px; height: 15px; accent-color: var(--red);
     </div>
   </div>
   <div class="spacer"></div>
-  <div class="meta">数据更新时间：<b id="gen-time">—</b><span id="upstream-tag" style="display:none;margin-left:10px;cursor:pointer" title="点击立即同步到线上">· 线上：<b id="upstream-state">—</b></span></div>
+  <div class="meta">数据更新时间：<b id="gen-time">—</b><span id="upstream-tag" style="display:none;margin-left:10px;cursor:pointer" title="点击立即同步到线上">· 线上：<b id="upstream-state">—</b></span><span id="upstream-pull" style="display:none;margin-left:8px;cursor:pointer;color:#8a94a6" title="把线上看板里的删除/重命名/布局改动拉回本机">· 拉取线上改动</span></div>
   <div class="tools">
     <button class="btn primary" id="btn-update" title="上传数据文件（需密码）">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/></svg>
@@ -871,6 +871,7 @@ function submitAuth() {
       updateLockBtn();
       var cb = authCb; authCb = null;
       if (cb) cb();
+      /* 解锁后不在此处拉取：自动拉取统一由 probeServer 的定时器触发，避免重复 */
     } else if (j && j._status === 404) {
       err.textContent = '当前为静态访问，管理功能需通过服务端打开（线上链接或本地 run.sh）';
       err.style.display = '';
@@ -924,6 +925,8 @@ $('btn-lock').addEventListener('click', function () {
   authCb = function () {
     updateLockBtn();
     toast('已解锁，可上传数据并使用回收站等管理功能', 'ok');
+    /* 解锁后立即拉一次线上改动（定时器也许还没起，这里补一次；有变化会自动刷新） */
+    if (serverMode) setTimeout(function () { autoPullFromUpstream(); }, 300);
   };
   $('auth-title').textContent = '管理员解锁';
   $('auth-hint').textContent = '输入管理员密码后，可上传新数据、使用回收站并管理文章。';
@@ -1675,13 +1678,20 @@ function probeBackends() {
 }
 function probeServer() {
   var ctl = new AbortController();
-  var timer = setTimeout(function () { ctl.abort(); }, 2500);
-  fetch('/api/status', { signal: ctl.signal })
+  var timer = setTimeout(function () { ctl.abort(); }, 2500);  fetch('/api/status', { signal: ctl.signal })
     .then(function (r) { return r.ok ? r.json() : null; })
     .then(function (j) {
       if (j && j.job) {
         serverMode = true;
         refreshUpstream();
+        /* 自动拉取统一走定时器：此刻即拉一次，之后每 3 分钟检查；
+           解锁不再单独触发，避免“加载+解锁”两次拉取叠加 */
+        if (isUnlocked()) autoPullFromUpstream();
+        if (!upstreamPullTimer) {
+          upstreamPullTimer = setInterval(function () {
+            if (isUnlocked()) autoPullFromUpstream();
+          }, 180000);
+        }
         if (j.job.running) { toast('数据更新进行中，完成后将自动刷新', 'info'); pollSyncStatus(); }
       }
     })
@@ -1690,16 +1700,26 @@ function probeServer() {
 }
 
 /* ---- 本机 → 线上 同步状态 ---- */
+var upstreamPullTimer = null;   /* 自动拉取定时器（仅一个） */
 function renderUpstream(j) {
-  var tag = $('upstream-tag'), st = $('upstream-state');
+  var tag = $('upstream-tag'), st = $('upstream-state'), pl = $('upstream-pull');
   if (!tag || !st) return;
-  if (!j || !j.configured) { tag.style.display = 'none'; return; }
+  if (!j || !j.configured) {
+    tag.style.display = 'none';
+    if (pl) pl.style.display = 'none';
+    return;
+  }
   tag.style.display = '';
+  if (pl) pl.style.display = '';
   if (j.last_push_ok === true) { st.textContent = '已同步'; st.style.color = '#1a7f37'; }
   else if (j.last_push_ok === false) { st.textContent = '未同步'; st.style.color = '#c0392b'; }
   else { st.textContent = '待同步'; st.style.color = '#8a94a6'; }
   tag.title = (j.url || '') + ' · 上次推送：' + (j.last_push_at || '尚未推送')
-    + (j.last_push_message ? ' · ' + j.last_push_message : '') + '（点击立即同步到线上）';
+    + (j.last_push_message ? ' · ' + j.last_push_message : '')
+    + (j.last_pull_at ? ' · 上次拉取：' + j.last_pull_at : '') + '（点击立即同步到线上）';
+  if (pl) pl.title = '把线上看板里的删除/重命名/布局改动拉回本机'
+    + (j.last_pull_at ? '（上次拉取：' + j.last_pull_at
+       + (j.last_pull_message ? '，' + j.last_pull_message : '') + '）' : '');
 }
 function refreshUpstream() {
   if (!serverMode) return;
@@ -1715,6 +1735,108 @@ if ($('upstream-tag')) {
         else toast('同步失败：' + ((j && j.message) || '请检查网络'), 'err');
         refreshUpstream();
       }).catch(function () { toast('无法连接本机服务', 'err'); });
+    });
+  });
+}
+
+/* ---- 线上 → 本机 拉取：把云端删除/重命名/布局改动带回本机 ---- */
+/* 记住本机已消化过的状态签名：同一份云端状态只采用一次。
+   否则布局比较基准在刷新后重置，会判定“有变化”→再刷新，形成无限刷新循环 */
+var APPLIED_SIG_KEY = 'gzh_upstream_applied_v1';
+function layoutSig(v) {
+  /* 只比较有意义的字段；saved_at 每次保存都会变，不能参与相等判断 */
+  if (!v || !v.order || !v.order.length) return '';
+  return JSON.stringify({ o: v.order, s: v.span || {}, h: v.heights || {} });
+}
+function stateSig(j) {
+  var s = {
+    d: normMap((j && j.deleted) || {}),
+    t: normMap((j && j.titles) || {}),
+    l: layoutSig(j && j.layout)
+  };
+  var txt = s.d + '|' + s.t + '|' + s.l;
+  /* 作一个短指纹存进 localStorage，避免把整份状态写进存储 */
+  var h = 5381;
+  for (var i = 0; i < txt.length; i++) { h = ((h * 33) ^ txt.charCodeAt(i)) >>> 0; }
+  return txt.length.toString(36) + '.' + h.toString(36);
+}
+function normMap(m) {
+  /* 按键排序后序列化，用于与顺序无关的相等比较 */
+  var o = {};
+  Object.keys(m || {}).sort().forEach(function (k) { o[k] = m[k]; });
+  return JSON.stringify(o);
+}
+function adoptUpstreamState(j) {
+  /* 采用拉回的状态；返回是否有实质变化（决定是否刷新页面）。
+
+     关键：删除/重命名要与“页面当前渲染的数据”比较，而不是与 localStorage 比较。
+     服务端拉回后 store.json 的 deleted/titles 已生效，data.js 已剔除这些文章，
+     刷新后 localDeleted 往往是空的——若拿它当基准，会每次刷新都判定“有变化”，
+     导致解锁后无限刷新。这里以 serverDeleted / serverManual 为基准即可幂等。
+  */
+  var changed = false;
+  var jd = (j && j.deleted && typeof j.deleted === 'object') ? j.deleted : {};
+  var jt = (j && j.titles && typeof j.titles === 'object') ? j.titles : {};
+  if (normMap(jd) !== normMap(localDeleted)) {
+    localDeleted = jd; LSS(DEL_KEY, localDeleted);
+    if (normMap(jd) !== normMap(serverDeletedMap())) changed = true;
+  }
+  if (normMap(jt) !== normMap(localTitles)) {
+    localTitles = jt; LSS(TITLES_KEY, localTitles);
+    if (normMap(jt) !== normMap(serverManual)) changed = true;
+  }
+  /* 布局：云端有布局才采用；为空时不清空本机（避免误伤本机排布）。
+     是否“变化”以已消化签名为准，保证同一份云端布局跨刷新只应用一次 */
+  var ls = layoutSig(j && j.layout);
+  if (ls) {
+    var applied = LS(APPLIED_SIG_KEY, '');
+    if (ls !== layoutSig(cloudLayout) && ls !== layoutSig(LS(LAYOUT_KEY, null))
+        && ls !== applied) {
+      cloudLayout = j.layout;
+      LSS(LAYOUT_KEY, j.layout);
+      LSS(APPLIED_SIG_KEY, ls);
+      changed = true;
+    }
+  }
+  return changed;
+}
+function serverDeletedMap() {
+  /* data.js 里已剔除的文章（回收站快照）→ {id: {title, deleted_at}} */
+  var o = {};
+  (serverDeleted || []).forEach(function (x) {
+    if (x && x.id) o[x.id] = { title: x.title || '', deleted_at: x.deleted_at || '' };
+  });
+  return o;
+}
+function pullFromUpstream(quiet) {
+  if (!serverMode) return Promise.resolve(false);
+  return api('/api/pull', {}).then(function (j) {
+    if (j && j.ok) {
+      var changed = adoptUpstreamState(j.state);
+      if (!quiet) toast(changed ? '已拉取线上改动，正在刷新…' : '线上暂无新改动', changed ? 'ok' : 'info');
+      if (changed) setTimeout(function () { location.reload(); }, 400);
+      return changed;
+    }
+    if (!quiet) toast('拉取失败：' + ((j && j.message) || '请检查网络'), 'err');
+    return false;
+  }).catch(function () { if (!quiet) toast('无法连接本机服务', 'err'); return false; });
+}
+/* 自动拉取：同一时刻只允许一个请求在飞，避免解锁瞬间与页面加载探测叠加触发 */
+var autoPullBusy = false;
+function autoPullFromUpstream() {
+  /* 未解锁（无令牌）会 403，直接跳过，等解锁后再拉 */
+  if (!serverMode || !isUnlocked() || autoPullBusy) return;
+  autoPullBusy = true;
+  api('/api/pull', {}).then(function (j) {
+    autoPullBusy = false;
+    if (j && j.ok && adoptUpstreamState(j.state)) location.reload();
+  }).catch(function () { autoPullBusy = false; });
+}
+if ($('upstream-pull')) {
+  $('upstream-pull').addEventListener('click', function () {
+    requireAuth('拉取线上改动', function () {
+      toast('正在从线上拉取改动…', 'info');
+      pullFromUpstream(false).then(function () { refreshUpstream(); });
     });
   });
 }

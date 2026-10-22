@@ -49,7 +49,6 @@ PID_PATH = os.path.join(BASE_DIR, "serve.pid")
 
 # 写操作密码（删除/还原/彻底删除/重命名/采集更新）。内网开放后，接口同样需要密码。
 # 页面不再保存密码：POST /api/auth 由本服务比对后下发临时 token，写操作凭 token 放行。
-# 默认值仅为占位符，部署前必须修改：推荐设置环境变量 ADMIN_PWD，或直接改下面这一行。
 ACCESS_PWD = os.environ.get("ADMIN_PWD", "change-me")
 TOKEN_TTL = 8 * 60 * 60
 _TOKENS = {}
@@ -258,11 +257,15 @@ def api_rename(mid, title):
 # 线上站点地址：留空则不同步；在 config.json 的 upstream 填入你自己的线上地址
 # 若线上同时提供「自定义域名 + 平台预设域名」两套入口，可把预设域名写进 UPSTREAM_FALLBACKS，
 # 主域名不可达时会自动回退，保证同步不中断。
+# 典型配置（EdgeOne Pages）：
+#   DEFAULT_UPSTREAM = "https://你的域名.example.com"
+#   UPSTREAM_FALLBACKS = ["https://你的项目名.edgeone.cool"]
 DEFAULT_UPSTREAM = ""
 UPSTREAM_FALLBACKS = []
 
 _push_lock = threading.Lock()
 _push_state = {"running": False, "last_at": "", "last_ok": None, "last_message": ""}
+_PULL_STATE = {"last_at": "", "last_ok": None, "last_message": ""}
 
 
 def _upstream_conf():
@@ -424,6 +427,9 @@ def upstream_snapshot():
         "last_push_at": _push_state.get("last_at", ""),
         "last_push_ok": _push_state.get("last_ok", None),
         "last_push_message": _push_state.get("last_message", ""),
+        "last_pull_at": _PULL_STATE.get("last_at", ""),
+        "last_pull_ok": _PULL_STATE.get("last_ok", None),
+        "last_pull_message": _PULL_STATE.get("last_message", ""),
     }
 
 
@@ -465,13 +471,21 @@ def push_to_upstream(reason="", with_data=True, with_state=True):
                     v = v or {}
                     deleted[str(k)] = {"title": v.get("title", ""),
                                        "deleted_at": v.get("deleted_at", "")}
+                rev_sent = int(time.time() * 1000)
                 j = _up_post(conf, "/api/state", {
-                    "rev": int(time.time() * 1000),
+                    "rev": rev_sent,
                     "deleted": deleted,
                     "titles": store.get("manual_titles") or {},
                 }, timeout=30)
                 if j.get("ok"):
                     msgs.append("回收站状态已同步")
+                    # 记录本次成功推送的 rev：从线上拉回时若线上 rev 不超过它，
+                    # 说明线上没有更新的改动（或推送曾失败），合并需保留本机独有条目
+                    try:
+                        store["_last_push_rev"] = int(j.get("rev") or rev_sent)
+                        sync.save_json(STORE_PATH, store)
+                    except Exception:
+                        pass
                 else:
                     msgs.append("回收站状态同步失败：%s" % (j.get("message") or "未知原因"))
             except Exception as e:
@@ -485,6 +499,107 @@ def push_to_upstream(reason="", with_data=True, with_state=True):
     finally:
         with _push_lock:
             _push_state["running"] = False
+
+
+def _log_pull(msg):
+    try:
+        with open(LOG_PATH, "a", encoding="utf-8") as lf:
+            lf.write("%s  [下行拉取] %s\n" % (_now(), msg))
+    except Exception:
+        pass
+
+
+def _http_get_json(url, timeout=30):
+    """GET 一个 JSON 接口；非 2xx 或响应不是 JSON 时抛异常，由调用方决定回退。"""
+    req = Request(url, method="GET")
+    with urlopen(req, timeout=timeout) as r:
+        raw = r.read().decode("utf-8", "replace")
+    return json.loads(raw)
+
+
+def pull_from_upstream(reason="页面拉取"):
+    """线上 → 本机：把云端的 删除/重命名/布局 状态拉回，合并进 store.json 并刷新 data.js。
+
+    背景：线上看板（cloudMode）的删除/恢复/重命名/布局只写入云端 Blob，
+    本机 store.json 原先只能推、不能拉，导致线上改动本机看不到，
+    且下次推送还会用本机旧状态覆盖线上。
+
+    合并规则（按 rev 水位判断，兼顾「云端权威」与「本机未推送改动不丢」）：
+    - 线上 rev > 本机 _last_push_rev：线上有更新改动，整体采用线上的
+      deleted/titles（线上做的删除、恢复、重命名都会带回本机）
+    - 线上 rev <= 本机 _last_push_rev：线上不超过本机最后一次成功推送，
+      以上次推送后的线上状态为基底，补回本机独有的 deleted/manual_titles
+      条目（推送失败期间的本机改动不被覆盖丢失）
+
+    布局随状态一起返回，由页面决定是否采用（线上为空时不清空本机布局，避免误伤）。
+    返回 (ok, message, state)；无实质变化时不落盘、不重写 data.js。
+    """
+    conf = _upstream_conf()
+    if not conf["url"]:
+        return False, "未配置线上地址", None
+    up, errs = None, []
+    for base in _upstream_candidates(conf):
+        try:
+            j = _http_get_json(base + "/api/state", timeout=30)
+        except Exception as e:
+            errs.append("%s 不可读（%s）" % (base, str(e)[:60]))
+            continue
+        if (isinstance(j, dict) and isinstance(j.get("rev"), (int, float))
+                and isinstance(j.get("deleted"), dict)
+                and isinstance(j.get("titles"), dict)):
+            up = j
+            break
+        errs.append("%s 返回格式异常" % base)
+    if up is None:
+        msg = "拉取失败：" + "；".join(errs or ["线上无响应"])
+        _PULL_STATE.update({"last_at": _now(), "last_ok": False, "last_message": msg})
+        return False, msg, None
+
+    store = _load_store()
+    try:
+        local_rev = int(store.get("_last_push_rev") or 0)
+    except Exception:
+        local_rev = 0
+    up_rev = int(up.get("rev") or 0)
+    up_deleted = up.get("deleted") or {}
+    up_titles = up.get("titles") or {}
+
+    if up_rev > local_rev:
+        deleted, titles = dict(up_deleted), dict(up_titles)
+        mode = "采用线上状态"
+    else:
+        deleted = dict(up_deleted)
+        for k, v in (store.get("deleted") or {}).items():
+            deleted.setdefault(k, v)
+        titles = dict(up_titles)
+        for k, v in (store.get("manual_titles") or {}).items():
+            titles.setdefault(k, v)
+        mode = "合并（保留本机未推送改动）"
+
+    state = {"rev": up_rev, "deleted": deleted, "titles": titles,
+             "layout": up.get("layout") or None,
+             "added_deleted": 0, "added_titles": 0}
+    old_del = store.get("deleted") or {}
+    old_tit = store.get("manual_titles") or {}
+    if deleted == old_del and titles == old_tit:
+        # 无实质变化：不落盘、不重写 data.js，避免每次打开页面都重写大数据文件
+        msg = "线上暂无新改动"
+        _PULL_STATE.update({"last_at": _now(), "last_ok": True, "last_message": msg})
+        return True, msg, state
+
+    state["added_deleted"] = len([k for k in deleted if k not in old_del])
+    state["added_titles"] = len([k for k in titles if k not in old_tit])
+    store["deleted"] = deleted
+    store["manual_titles"] = titles
+    store["_last_pull_at"] = _now()
+    sync.save_json(STORE_PATH, store)
+    sync.write_data_js(store)
+
+    msg = "已从线上拉回（%s）：删除 %d 项、重命名 %d 项" % (mode, len(deleted), len(titles))
+    _PULL_STATE.update({"last_at": _now(), "last_ok": True, "last_message": msg})
+    _log_pull("%s → %s（%s，删除 %+d、重命名 %+d）"
+              % (reason, conf["url"], mode, state["added_deleted"], state["added_titles"]))
+    return True, msg, state
 
 
 def _push_state_async(reason):
@@ -581,7 +696,7 @@ class Handler(BaseHTTPRequestHandler):
         # 写操作必须携带服务端下发的临时 token
         if path in ("/api/sync", "/api/delete", "/api/restore",
                     "/api/purge", "/api/rename", "/api/unrename",
-                    "/api/data", "/api/push", "/api/upstream"):
+                    "/api/data", "/api/push", "/api/pull", "/api/upstream"):
             if not _check_token((body or {}).get("token")):
                 self._send_json({"ok": False, "message": "未解锁或登录已过期，请重新验证"}, code=403)
                 return
@@ -653,6 +768,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"ok": ok, "message": msg,
                                  "push_message": msg,
                                  "pushed_at": _push_state.get("last_at", "")})
+                return
+            if path == "/api/pull":
+                ok, msg, state = pull_from_upstream("页面拉取")
+                self._send_json({"ok": ok, "message": msg, "state": state})
                 return
             if path == "/api/upstream":
                 try:

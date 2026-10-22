@@ -4,7 +4,7 @@
   "secret": "你的AppSecret",
   "lookback_days": 7,
   "article_detail_days": 30,
-  "_upstream说明": "留空则不同步；填入你自己的线上站点地址，例如 https://your-site.example.com",
+  "_upstream说明": "留空则不同步；填入你自己的线上站点地址，例如 https://your-site.example.com。推送与拉取都使用该地址",
   "upstream": "",
   "upstream_pwd": "你的线上管理密码",
   "upstream_auto_push": true
